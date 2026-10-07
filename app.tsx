@@ -21,6 +21,7 @@ import {
 import {
   ThreadTitle,
   definePluginApp,
+  experimental_Icon as Icon,
   experimental_usePluginId,
   experimental_useSidebarThreadActions,
   experimental_useSidebarThreadSplit,
@@ -35,14 +36,7 @@ import type {
   PluginThreadListProps,
 } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "./server";
-import {
-  dateLocale,
-  makeTimeFormat,
-  resolveHour12,
-  resolveLang,
-  type Lang,
-  type SystemClockHint,
-} from "./lib/locale";
+import { resolveLang, type Lang } from "./lib/locale";
 import {
   compareThreads,
   comparePinned,
@@ -80,7 +74,6 @@ const STRINGS = {
     actionsFor: (title: string) => `Actions for ${title}`,
     expand: (name: string) => `Expand ${name}`,
     collapse: (name: string) => `Collapse ${name}`,
-    yesterday: "Yesterday",
     draft: "Unsent draft",
   },
   ru: {
@@ -104,16 +97,10 @@ const STRINGS = {
     actionsFor: (title: string) => `Действия: ${title}`,
     expand: (name: string) => `Развернуть ${name}`,
     collapse: (name: string) => `Свернуть ${name}`,
-    yesterday: "Вчера",
     draft: "Неотправленный черновик",
   },
 } as const;
 type Strings = (typeof STRINGS)[Lang];
-
-function startOfDay(ms: number): number {
-  const date = new Date(ms);
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-}
 
 function parseWindow(value: unknown): WindowHours {
   const hours = Number.parseInt(String(value ?? ""), 10);
@@ -159,7 +146,6 @@ interface Group {
 
 interface RowContext {
   t: Strings;
-  formatWhen: (ms: number) => string;
   activeThreadId: string | null;
   isCompactViewport: boolean;
   onNavigate: () => void;
@@ -180,20 +166,6 @@ function LatestThreadsList(props: PluginThreadListProps) {
 
   const lang = resolveLang(values?.language);
   const t = STRINGS[lang];
-  // The computer's own clock settings, read once by the server.
-  const [systemClock, setSystemClock] = useState<SystemClockHint | null>(null);
-  useEffect(() => {
-    let alive = true;
-    rpc.call("system_clock").then(
-      (value) => alive && setSystemClock(value),
-      () => undefined,
-    );
-    return () => {
-      alive = false;
-    };
-  }, [rpc]);
-  const hour12 = resolveHour12(values?.timeFormat, lang, systemClock);
-
   // Optimistic view state: the setting round-trip must not lag the click.
   const [pending, setPending] = useState<{ recentOnly?: boolean; windowHours?: WindowHours }>({});
   const recentOnly = pending.recentOnly ?? values?.recentOnly !== false;
@@ -238,25 +210,6 @@ function LatestThreadsList(props: PluginThreadListProps) {
 
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [menuId, setMenuId] = useState<string | null>(null);
-
-  const formatWhen = useMemo(() => {
-    const time = makeTimeFormat(lang, hour12);
-    const day = new Intl.DateTimeFormat(dateLocale(lang), { day: "numeric", month: "short" });
-    const dayYear = new Intl.DateTimeFormat(dateLocale(lang), {
-      day: "numeric",
-      month: "short",
-      year: "numeric",
-    });
-    return (ms: number) => {
-      const today = startOfDay(now);
-      const that = startOfDay(ms);
-      if (that === today) return time.format(ms);
-      if (today - that <= 26 * HOUR_MS && today - that > 0) return t.yesterday;
-      return new Date(ms).getFullYear() === new Date(now).getFullYear()
-        ? day.format(ms)
-        : dayYear.format(ms);
-    };
-  }, [lang, hour12, now, t]);
 
   const { pinned, groups, totalVisible } = useMemo(() => {
     const visible = threads.filter((thread) => !thread.isHidden && !thread.isArchived);
@@ -325,7 +278,6 @@ function LatestThreadsList(props: PluginThreadListProps) {
 
   const ctx: RowContext = {
     t,
-    formatWhen,
     activeThreadId: props.activeThreadId,
     isCompactViewport: props.isCompactViewport,
     onNavigate: props.onNavigate,
@@ -514,12 +466,54 @@ function ThreadTree({ threads, ctx }: { threads: PluginSidebarThread[]; ctx: Row
   return <div className="space-y-px">{roots.map((thread) => render(thread, 0))}</div>;
 }
 
-function statusDotClass(thread: PluginSidebarThread): string {
-  if (isBusy(thread)) return "bg-primary animate-pulse";
-  if (thread.indicator === "unread-error" || thread.queuedWork === "failed") return "bg-destructive";
-  if (needsUser(thread)) return "bg-amber-500";
-  if (thread.isUnread) return "bg-foreground/70";
-  return "bg-muted-foreground/30";
+// Glyphs follow BB's own list: a dot for unread, a spinner while the agent
+// works, a question mark when it waits for you, a red cross after a failure.
+const ACTIVITY_ICONS: Partial<Record<PluginSidebarThread["indicator"], string>> = {
+  workflow: "Workflow",
+  "background-agent": "UserRoundPlus",
+  "background-command": "Terminal",
+  "plan-mode": "ListTodo",
+  goal: "Target",
+};
+
+function StatusGlyph({ thread, hasDraft, draftLabel }: { thread: PluginSidebarThread; hasDraft: boolean; draftLabel: string }) {
+  const label = thread.indicatorLabel ?? undefined;
+  let kind: string = thread.indicator;
+  if (needsUser(thread) && kind !== "unread-error") kind = "waiting-for-input";
+  if (hasDraft && (kind === "none" || kind === "unread-success")) kind = "draft";
+  if (hasDraft && kind === "runtime") kind = "working-draft";
+  if (kind === "none" && thread.isUnread) kind = "unread-success";
+  const icon = "size-3.5 shrink-0";
+  switch (kind) {
+    case "unread-error":
+    case "queued-failed":
+      return <Icon name="CircleX" className={`${icon} text-destructive`} aria-label={label} />;
+    case "waiting-for-input":
+      return <Icon name="CircleQuestion" className={`${icon} text-muted-foreground`} aria-label={label} />;
+    case "queued-waiting":
+      return <Icon name="Clock" className={`${icon} text-muted-foreground/75`} aria-label={label} />;
+    case "runtime":
+    case "working-draft":
+      return (
+        <Icon
+          name="Loading"
+          className={`${icon} animate-spin text-muted-foreground/60 motion-reduce:animate-none`}
+          aria-label={label}
+        />
+      );
+    case "draft":
+      return <Icon name="Pencil" fallback="Edit" className={`${icon} text-muted-foreground/60`} aria-label={draftLabel} />;
+    case "unread-success":
+      return <span aria-label={label ?? undefined} className="mx-1 size-[5px] shrink-0 rounded-full bg-muted-foreground/60" />;
+    default: {
+      const name = ACTIVITY_ICONS[thread.indicator];
+      if (name) return <Icon name={name} className={`${icon} text-muted-foreground/60`} aria-label={label} />;
+      // An indicator kind added in a later BB version: show it as working.
+      return isBusy(thread) ? (
+        <Icon name="Loading" className={`${icon} animate-spin text-muted-foreground/60`} aria-label={label} />
+      ) : null;
+    }
+  }
 }
 
 function ThreadRow({
@@ -571,7 +565,7 @@ function ThreadRow({
           data-sidebar-thread-id={thread.id}
           onClick={open}
           aria-label={thread.indicatorLabel ? `${title} - ${thread.indicatorLabel}` : title}
-          className={`flex min-w-0 items-center gap-2 rounded-md py-1 pr-7 text-sm ${
+          className={`flex min-w-0 items-center gap-2 rounded-md py-1 pr-2 text-sm ${
             thread.isUnread && !isActive ? "font-medium text-foreground" : "text-muted-foreground"
           }`}
           style={{ paddingLeft: 8 + depth * 14 }}
@@ -593,17 +587,11 @@ function ThreadRow({
               ▸
             </span>
           ) : null}
-          <span aria-hidden="true" className={`size-1.5 shrink-0 rounded-full ${statusDotClass(thread)}`} />
           <span className="min-w-0 flex-1 truncate">
             <ThreadTitle threadId={thread.id} />
           </span>
-          {hasUnsubmittedDraft ? (
-            <span aria-label={ctx.t.draft} title={ctx.t.draft} className="shrink-0 text-[11px]">
-              ✎
-            </span>
-          ) : null}
-          <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground/70 group-hover/row:invisible">
-            {ctx.formatWhen(lastTouched(thread))}
+          <span className="flex w-4 shrink-0 items-center justify-center group-hover/row:invisible">
+            <StatusGlyph thread={thread} hasDraft={hasUnsubmittedDraft} draftLabel={ctx.t.draft} />
           </span>
         </a>
       )}

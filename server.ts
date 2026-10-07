@@ -1,15 +1,13 @@
 // bb-plugin-show-latest-threads - backend entry.
 //
-// Declares the plugin settings (language, clock, recent-only filter and its
+// Declares the plugin settings (language, recent-only filter and its
 // window) and one RPC method the sidebar list calls when the user flips the
 // filter or picks 24/48/72 hours in the list itself. Settings stay the single
 // store, so the Settings page and every open window agree.
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { readSystemClock } from "./lib/system-clock";
 
 export const LANGUAGE_OPTIONS = ["System", "English", "Русский"];
-export const TIME_FORMAT_OPTIONS = ["System", "12-hour (2:30 PM)", "24-hour (14:30)"];
 export const WINDOW_OPTIONS = ["24 hours", "48 hours", "72 hours"];
 
 export const rpcContract = defineRpcContract({
@@ -21,10 +19,6 @@ export const rpcContract = defineRpcContract({
       })
       .strict(),
     output: z.object({ ok: z.literal(true) }),
-  },
-  system_clock: {
-    input: z.null(),
-    output: z.object({ locale: z.string().nullable(), hour12: z.boolean().nullable() }),
   },
 });
 
@@ -50,13 +44,6 @@ export default async function plugin(bb: BbPluginApi) {
       options: LANGUAGE_OPTIONS,
       default: "System",
     },
-    timeFormat: {
-      type: "select",
-      label: "Time format / Формат времени",
-      description: "System follows your computer: its 24-hour time switch on macOS, otherwise its region (24 hours in Germany, 12 in the US).",
-      options: TIME_FORMAT_OPTIONS,
-      default: "System",
-    },
   });
 
   bb.rpc.register(rpcContract, {
@@ -67,7 +54,6 @@ export default async function plugin(bb: BbPluginApi) {
       });
       return { ok: true as const };
     },
-    system_clock: () => readSystemClock(),
   });
 
   bb.log.info("loaded");
