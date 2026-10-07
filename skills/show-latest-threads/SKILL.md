@@ -9,6 +9,9 @@ The plugin replaces the sidebar thread list. At the top of the list the user
 switches "Recent only" and picks a 24, 48 or 72 hour window. Hidden threads
 are still there; they only leave the list.
 
+Project and section headings sort by name ascending, with natural numeric
+ordering (1.9, 1.10, 1.12). Thread rows keep BB's activity order.
+
 Each row shows its status on the right, like BB's own list: a dot for
 unread, a spinner while the agent works, a question mark when it waits for
 an answer, a red cross after a failure, a clock for a queued message, and a

@@ -3,7 +3,7 @@
 // A sidebar thread list (the exclusive `experimental_threadList` slot) that
 // can hide everything with no activity inside a 24, 48 or 72 hour window.
 // Pinned threads come first, then named sections, then projects ordered by
-// their latest activity. A kept child thread keeps its parents, so the tree
+// name ascending, with natural numeric ordering. A kept child keeps its parents, so the tree
 // never breaks. The active thread and threads that are running or waiting
 // for an answer stay visible whatever their age.
 //
@@ -37,11 +37,11 @@ import type {
 } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "./server";
 import { resolveLang, type Lang } from "./lib/locale";
+import { compareGroups } from "./lib/ordering";
 import {
   compareThreads,
   comparePinned,
   isBusy,
-  lastTouched,
   needsUser,
   selectRecent,
 } from "./lib/recent";
@@ -141,7 +141,6 @@ interface Group {
   name: string;
   project: PluginSidebarProject | null;
   threads: PluginSidebarThread[];
-  latest: number;
 }
 
 interface RowContext {
@@ -231,15 +230,13 @@ function LatestThreadsList(props: PluginThreadListProps) {
       if (!group) {
         group = {
           key,
-          name: section ? section.name : project?.isPersonal ? t.personal : (project?.name ?? "—"),
+          name: section ? section.name : project?.isPersonal ? t.personal : (project?.name ?? "-"),
           project: section ? null : project,
           threads: [],
-          latest: 0,
         };
         byKey.set(key, group);
       }
       group.threads.push(thread);
-      group.latest = Math.max(group.latest, lastTouched(thread));
     }
     // With the filter off, every project is listed, even one without threads,
     // so its "+ new thread" button stays reachable.
@@ -252,14 +249,10 @@ function LatestThreadsList(props: PluginThreadListProps) {
           name: project.isPersonal ? t.personal : project.name,
           project,
           threads: [],
-          latest: 0,
         });
       }
     }
-    const ordered = [...byKey.values()].sort((a, b) => {
-      const sectionFirst = Number(b.key.startsWith("section:")) - Number(a.key.startsWith("section:"));
-      return sectionFirst !== 0 ? sectionFirst : b.latest - a.latest;
-    });
+    const ordered = [...byKey.values()].sort(compareGroups);
     return { pinned: pinnedThreads, groups: ordered, totalVisible: shown.length };
   }, [threads, projects, sections, recentOnly, windowHours, now, props.activeThreadId, t]);
 
@@ -428,7 +421,11 @@ function GroupBlock({ group, ctx }: { group: Group; ctx: RowContext }) {
           </button>
         ) : null}
       </div>
-      {!isCollapsed ? <ThreadTree threads={group.threads} ctx={ctx} /> : null}
+      {!isCollapsed ? (
+        <div className="mb-1 ml-5 border-l border-sidebar-border pl-3">
+          <ThreadTree threads={group.threads} ctx={ctx} />
+        </div>
+      ) : null}
     </section>
   );
 }
